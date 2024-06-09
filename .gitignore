@@ -1,0 +1,5 @@
+./*.py
+./*.http
+./.venv
+./dags
+./docker/airflow_data
