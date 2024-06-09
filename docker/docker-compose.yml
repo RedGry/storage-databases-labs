@@ -1,0 +1,116 @@
+version: '3.8'
+
+x-airflow-common:
+  &airflow-common
+  image: apache/airflow:2.2.3
+  environment:
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__CORE__LOAD_EXAMPLES: False
+    AIRFLOW__CORE__EXPOSE_CONFIG: True
+    AIRFLOW__WEBSERVER__EXPOSE_CONFIG: True
+    AIRFLOW__API__AUTH_BACKEND: 'airflow.api.auth.backend.default'
+    AIRFLOW__CORE__SQL_ALCHEMY_CONN: postgresql+psycopg2://postgres:postgres@postgres:5432/postgres
+  volumes:
+    - ./dags:/opt/airflow/dags
+    - ./airflow_data/logs:/opt/airflow/logs
+    - ./airflow_data/plugins:/opt/airflow/plugins
+    - ./requirements.txt:/requirements.txt
+  depends_on:
+    - postgres
+    - mongo
+
+
+services:
+  postgres:
+    image: postgres
+    environment:
+      POSTGRES_DB: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    restart: always
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./init-postgres:/docker-entrypoint-initdb.d
+    ports:
+      - "5432:5432"
+    networks:
+      - airflow
+
+  #  pgadmin:
+  #    image: dpage/pgadmin4
+  #    environment:
+  #      PGADMIN_DEFAULT_EMAIL: admin@example.com
+  #      PGADMIN_DEFAULT_PASSWORD: admin
+  #    ports:
+  #      - "5050:80"
+  #    depends_on:
+  #      - postgres
+
+  mongo:
+    image: mongo
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=root
+      - MONGO_INITDB_ROOT_PASSWORD=root
+      - MONGO_INITDB_DATABASE=mydatabase
+    volumes:
+      - mongodata:/data/db
+      - ./init-mongo:/docker-entrypoint-initdb.d
+    ports:
+      - "27017:27017"
+    networks:
+      - airflow
+
+  airflow-init:
+    <<: *airflow-common
+    container_name: airflow_init
+    entrypoint: /bin/bash
+    command: >
+      -c "
+      pip install -r /requirements.txt &&
+      airflow db init && 
+      airflow users create --role Admin --username airflow --password airflow --email airflow@airflow.com --firstname airflow --lastname airflow
+      "
+    restart: on-failure
+    networks:
+      - airflow
+    depends_on:
+      - postgres
+      - mongo
+
+  airflow-webserver:
+    <<: *airflow-common
+    command: >
+      bash -c "
+      pip install -r /requirements.txt &&
+      airflow webserver
+      "
+    ports:
+      - "8080:8080"
+    container_name: airflow_webserver
+    restart: always
+    networks:
+      - airflow
+    depends_on:
+      - airflow-init
+
+  airflow-scheduler:
+    <<: *airflow-common
+    command: >
+      bash -c "
+      pip install -r /requirements.txt &&
+      airflow scheduler
+      "
+    container_name: airflow_scheduler
+    restart: always
+    networks:
+      - airflow
+    depends_on:
+      - airflow-init
+
+volumes:
+  pgdata:
+  mongodata:
+
+networks:
+  airflow:
+    driver: bridge
