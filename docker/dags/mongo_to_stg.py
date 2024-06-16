@@ -5,7 +5,7 @@ from airflow.decorators import dag, task
 from airflow.models import Variable
 from pymongo import MongoClient
 from pymongo.errors import ConnectionFailure
-from sqlalchemy import create_engine, MetaData, select, insert, update
+from sqlalchemy import create_engine, MetaData, select, insert, update, delete
 from sqlalchemy.orm import sessionmaker
 import json
 from bson import ObjectId
@@ -51,25 +51,23 @@ def load_mongo_to_stg():
         settings_table = dwh_metadata.tables['stg.settings']
 
         # Получаем данные из таблицы настроек
-        query = select([settings_table.c.settings]).where(settings_table.c.setting_key == f'{stg_table_name}_last_id')
+        query = select([settings_table.c.settings]).where(
+            settings_table.c.setting_key == f'{stg_table_name}_last_version')
         result = dwh_session.execute(query).fetchone()
         if result:
-            last_id = result['settings']['last_id']
+            last_version = result['settings']['last_version']
         else:
-            last_id = None
+            last_version = 0
             initial_settings = insert(settings_table).values(
-                setting_key=f'{stg_table_name}_last_id',
-                settings={'last_id': last_id}
+                setting_key=f'{stg_table_name}_last_version',
+                settings={'last_version': last_version}
             )
             dwh_session.execute(initial_settings)
             dwh_session.commit()
 
         # Извлекаем данные из MongoDB
         collection = mongo_db[collection_name]
-        if last_id:
-            new_data = collection.find({"_id": {"$gt": ObjectId(last_id)}})
-        else:
-            new_data = collection.find()
+        new_data = collection.find()
 
         # print(new_data)
 
@@ -79,26 +77,40 @@ def load_mongo_to_stg():
             doc.pop('_id')
             doc_json = json.dumps(doc, default=str, ensure_ascii=False)
 
-            print(doc_json)
+            existing_record = dwh_session.execute(
+                select([stg_table]).where(stg_table.c.obj_id == doc_id)
+            ).fetchone()
 
-            insert_stmt = insert(stg_table).values(
-                obj_id=f'{doc_id}',
-                obj_val=doc_json,
-                when_update=pendulum.now()
-            )
-            dwh_session.execute(insert_stmt)
-            last_id = doc_id
+            if existing_record:
+                # Обновляем существующую запись новой версией
+                update_stmt = update(stg_table).where(stg_table.c.obj_id == doc_id).values(
+                    obj_val=doc_json,
+                    when_updated=pendulum.now(),
+                    version=last_version + 1
+                )
+                dwh_session.execute(update_stmt)
+            else:
+                # Вставляем новую запись
+                insert_stmt = insert(stg_table).values(
+                    obj_id=f'{doc_id}',
+                    obj_val=doc_json,
+                    when_updated=pendulum.now(),
+                    version=last_version + 1
+                )
+                dwh_session.execute(insert_stmt)
 
-        # Обновляем last_id в таблице настроек
-        if last_id:
-            update_settings = update(settings_table).where(
-                settings_table.c.setting_key == f'{stg_table_name}_last_id'
-            ).values(
-                settings={'last_id': last_id}
-            )
-            dwh_session.execute(update_settings)
-            dwh_session.commit()
+        delete_stmt = delete(stg_table).where(stg_table.c.version <= last_version)
+        dwh_session.execute(delete_stmt)
 
+        # Обновляем last_version в таблице настроек
+        update_settings = update(settings_table).where(
+            settings_table.c.setting_key == f'{stg_table_name}_last_version'
+        ).values(
+            settings={'last_version': last_version + 1}
+        )
+
+        dwh_session.execute(update_settings)
+        dwh_session.commit()
         dwh_session.close()
 
     @task()
@@ -117,7 +129,7 @@ def load_mongo_to_stg():
     restaurants_task = load_restaurants()
     orders_task = load_orders()
 
-    clients_task >> restaurants_task >> orders_task
+    [clients_task, restaurants_task, orders_task]
 
 
 mongo_to_stg_dag = load_mongo_to_stg()

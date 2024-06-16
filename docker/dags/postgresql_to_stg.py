@@ -1,7 +1,7 @@
 import pendulum
 from airflow.decorators import dag, task
 from airflow.models import Variable
-from sqlalchemy import create_engine, MetaData, select, insert, update, text
+from sqlalchemy import create_engine, MetaData, select, insert, update, text, delete
 from sqlalchemy.orm import sessionmaker
 
 DATABASE_URL_SRC = Variable.get('POSTGRESQL_URI')
@@ -34,61 +34,61 @@ def load_pg_tables_to_stg():
         stg_table = dwh_metadata.tables[f'stg.{stg_table_name}']
         settings_table = dwh_metadata.tables['stg.settings']
 
-        # Get last loaded ID
-        query = select([settings_table.c.settings]).where(settings_table.c.setting_key == f'{stg_table_name}_last_id')
+        # Get last version
+        query = select([settings_table.c.settings]).where(
+            settings_table.c.setting_key == f'{stg_table_name}_last_version')
         result = dwh_session.execute(query).fetchone()
 
         if result:
-            last_id = result['settings']['last_id']
+            last_version = result['settings']['last_version']
         else:
             # Initialize settings if the table is empty
-            last_id = None
+            last_version = 0
             initial_settings = insert(settings_table).values(
-                setting_key=f'{stg_table_name}_last_id',
-                settings={'last_id': last_id}
+                setting_key=f'{stg_table_name}_last_version',
+                settings={'last_version': last_version}
             )
             dwh_session.execute(initial_settings)
             dwh_session.commit()
 
         key_id = getattr(source_table.c, table_name + "_id")
-        # query = select(source_table).where(key_id > last_id)
-        # new_rows = src_session.execute(query).fetchall()
-        if last_id is not None:
-            if isinstance(last_id, int):
-                query = select([source_table]).where(key_id > last_id)
-            else:
-                query = select([source_table]).where(key_id > text(f"'{last_id}'"))
-        else:
-            query = select([source_table])
+
+        query = select([source_table])
         new_rows = src_session.execute(query).fetchall()
 
         for row in new_rows:
-            insert_stmt = stg_table.insert().values(
-                **row,
-                when_update=pendulum.now()
-            )
-            dwh_session.execute(insert_stmt)
-
-        if new_rows:
-            last_id = new_rows[-1][key_id]
-            existing_setting = dwh_session.execute(
-                select([settings_table.c.setting_key]).where(
-                    settings_table.c.setting_key == f'{stg_table_name}_last_id')
+            obj_id = row[key_id]
+            existing_record = dwh_session.execute(
+                select([stg_table]).where(stg_table.c[table_name + "_id"] == obj_id)
             ).fetchone()
 
-            if existing_setting:
-                update_settings = update(settings_table).where(
-                    settings_table.c.setting_key == f'{stg_table_name}_last_id'
-                ).values(
-                    settings={'last_id': last_id}
+            if existing_record:
+                # Update existing record with a new version
+                update_stmt = update(stg_table).where(stg_table.c[table_name + "_id"] == obj_id).values(
+                    **row,
+                    when_updated=pendulum.now(),
+                    version=last_version + 1
                 )
-                dwh_session.execute(update_settings)
+                dwh_session.execute(update_stmt)
             else:
-                insert_settings = insert(settings_table).values(
-                    setting_key=f'{stg_table_name}_last_id',
-                    settings={'last_id': last_id}
+                # Insert new record
+                insert_stmt = stg_table.insert().values(
+                    **row,
+                    when_updated=pendulum.now(),
+                    version=last_version + 1
                 )
-                dwh_session.execute(insert_settings)
+                dwh_session.execute(insert_stmt)
+
+        delete_stmt = delete(stg_table).where(stg_table.c.version <= last_version)
+        dwh_session.execute(delete_stmt)
+
+        # Update the settings table with the new version
+        update_settings = update(settings_table).where(
+            settings_table.c.setting_key == f'{stg_table_name}_last_version'
+        ).values(
+            settings={'last_version': last_version + 1}
+        )
+        dwh_session.execute(update_settings)
 
         dwh_session.commit()
         src_session.close()
@@ -110,7 +110,7 @@ def load_pg_tables_to_stg():
     dish_task = load_dish_data()
     client_task = load_client_data()
 
-    category_task >> [dish_task, client_task]
+    [category_task, dish_task, client_task]
 
 
 pg_tables_dag = load_pg_tables_to_stg()

@@ -2,7 +2,7 @@ import requests
 import pendulum
 from airflow.decorators import dag, task
 from airflow.models import Variable
-from sqlalchemy import create_engine, MetaData, select, insert, update
+from sqlalchemy import create_engine, MetaData, select, insert, update, delete
 from sqlalchemy.orm import sessionmaker
 import json
 
@@ -57,44 +57,61 @@ def load_api_to_stg():
         settings_table = dwh_metadata.tables['stg.settings']
         stg_table = dwh_metadata.tables['stg.api_deliveryman']
 
-        # Получение последнего id доставщика из таблицы настроек
-        query = select([settings_table.c.settings]).where(settings_table.c.setting_key == 'api_deliveryman_last_id')
+        # Получение последней версии из таблицы настроек
+        query = select([settings_table.c.settings]).where(
+            settings_table.c.setting_key == 'api_deliveryman_last_version')
         result = dwh_session.execute(query).fetchone()
         if result:
-            last_id = result['settings']['last_id']
+            last_version = result['settings']['last_version']
         else:
-            last_id = None
+            last_version = 0
             initial_settings = insert(settings_table).values(
-                setting_key='api_deliveryman_last_id',
-                settings={'last_id': last_id}
+                setting_key='api_deliveryman_last_version',
+                settings={'last_version': last_version}
             )
             dwh_session.execute(initial_settings)
             dwh_session.commit()
 
         # Сохранение данных deliverers в stg.api_deliveryman
         for deliverer in deliverers:
-            if last_id and deliverer['id'] <= last_id:
-                continue
             deliverer_id = deliverer['id']
             deliverer_name = deliverer['name']
+            deliverer_json = json.dumps(deliverer, default=str, ensure_ascii=False)
 
-            insert_stmt = insert(stg_table).values(
-                obj_id=deliverer_id,
-                obj_val=deliverer_name,
-                when_update=pendulum.now()
-            )
-            dwh_session.execute(insert_stmt)
-            last_id = deliverer_id
+            existing_record = dwh_session.execute(
+                select([stg_table]).where(stg_table.c.obj_id == deliverer_id)
+            ).fetchone()
 
-        # Обновление last_id в таблице настроек
-        if last_id:
-            update_settings = update(settings_table).where(
-                settings_table.c.setting_key == 'api_deliveryman_last_id'
-            ).values(
-                settings={'last_id': last_id}
-            )
-            dwh_session.execute(update_settings)
-            dwh_session.commit()
+            if existing_record:
+                # Обновляем существующую запись новой версией
+                update_stmt = update(stg_table).where(stg_table.c.obj_id == deliverer_id).values(
+                    obj_val=deliverer_name,
+                    when_updated=pendulum.now(),
+                    version=last_version + 1
+                )
+                dwh_session.execute(update_stmt)
+            else:
+                # Вставляем новую запись
+                insert_stmt = insert(stg_table).values(
+                    obj_id=deliverer_id,
+                    obj_val=deliverer_name,
+                    when_updated=pendulum.now(),
+                    version=last_version + 1
+                )
+                dwh_session.execute(insert_stmt)
+
+        # Удаление неактуальных версий
+        delete_stmt = delete(stg_table).where(stg_table.c.version <= last_version)
+        dwh_session.execute(delete_stmt)
+
+        # Обновление последней версии в таблице настроек
+        update_settings = update(settings_table).where(
+            settings_table.c.setting_key == 'api_deliveryman_last_version'
+        ).values(
+            settings={'last_version': last_version + 1}
+        )
+        dwh_session.execute(update_settings)
+        dwh_session.commit()
 
         dwh_session.close()
 
@@ -107,43 +124,60 @@ def load_api_to_stg():
             deliverer_id = deliverer['id']
             deliveries = get_deliveryman_data(deliverer_id)
 
-            # Получение последнего id доставки из таблицы настроек
+            # Получение последней версии из таблицы настроек
             query = select([settings_table.c.settings]).where(
-                settings_table.c.setting_key == f'api_delivery_{deliverer_id}_last_id')
+                settings_table.c.setting_key == f'api_delivery_{deliverer_id}_last_version')
             result = dwh_session.execute(query).fetchone()
             if result:
-                last_id = result['settings']['last_id']
+                last_version = result['settings']['last_version']
             else:
-                last_id = None
+                last_version = 0
                 initial_settings = insert(settings_table).values(
-                    setting_key=f'api_delivery_{deliverer_id}_last_id',
-                    settings={'last_id': last_id}
+                    setting_key=f'api_delivery_{deliverer_id}_last_version',
+                    settings={'last_version': last_version}
                 )
                 dwh_session.execute(initial_settings)
                 dwh_session.commit()
 
             # Сохранение данных deliveries в stg.api_delivery
             for delivery in deliveries:
-                if last_id and delivery['deliveryId'] <= last_id:
-                    continue
+                delivery_id = delivery['deliveryId']
                 delivery_json = json.dumps(delivery, default=str, ensure_ascii=False)
-                insert_stmt = insert(stg_table).values(
-                    obj_id=delivery['deliveryId'],
-                    obj_val=delivery_json,
-                    when_update=pendulum.now()
-                )
-                dwh_session.execute(insert_stmt)
-                last_id = delivery['deliveryId']
 
-            # Обновление last_id в таблице настроек
-            if last_id:
-                update_settings = update(settings_table).where(
-                    settings_table.c.setting_key == f'api_delivery_{deliverer_id}_last_id'
-                ).values(
-                    settings={'last_id': last_id}
-                )
-                dwh_session.execute(update_settings)
-                dwh_session.commit()
+                existing_record = dwh_session.execute(
+                    select([stg_table]).where(stg_table.c.obj_id == delivery_id)
+                ).fetchone()
+
+                if existing_record:
+                    # Обновляем существующую запись новой версией
+                    update_stmt = update(stg_table).where(stg_table.c.obj_id == delivery_id).values(
+                        obj_val=delivery_json,
+                        when_updated=pendulum.now(),
+                        version=last_version + 1
+                    )
+                    dwh_session.execute(update_stmt)
+                else:
+                    # Вставляем новую запись
+                    insert_stmt = insert(stg_table).values(
+                        obj_id=delivery_id,
+                        obj_val=delivery_json,
+                        when_updated=pendulum.now(),
+                        version=last_version + 1
+                    )
+                    dwh_session.execute(insert_stmt)
+
+            # Удаление неактуальных версий
+            delete_stmt = delete(stg_table).where(stg_table.c.version <= last_version)
+            dwh_session.execute(delete_stmt)
+
+            # Обновление последней версии в таблице настроек
+            update_settings = update(settings_table).where(
+                settings_table.c.setting_key == f'api_delivery_{deliverer_id}_last_version'
+            ).values(
+                settings={'last_version': last_version + 1}
+            )
+            dwh_session.execute(update_settings)
+            dwh_session.commit()
 
         dwh_session.close()
 
@@ -159,5 +193,6 @@ def load_api_to_stg():
 
     deliverers = load_deliverers_task()
     load_deliveries_task(deliverers)
+
 
 api_to_stg_dag = load_api_to_stg()

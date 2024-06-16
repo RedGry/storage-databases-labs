@@ -181,9 +181,10 @@ def calculate_deliveryman_income():
     # wait_for_dds = ExternalTaskSensor(
     #     task_id='wait_for_dds',
     #     external_dag_id='load_stg_tables_to_dds',
-    #     external_task_id=None,
-    #     mode='poke',
-    #     timeout=120
+    #     external_task_id='load_fact_table_data',
+    #     mode='reschedule',
+    #     timeout=60,
+    #     poke_interval=10,
     # )
 
     delivery_income_task = process_deliveryman_income()

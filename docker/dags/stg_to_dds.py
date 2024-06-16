@@ -5,6 +5,7 @@ import pendulum
 from airflow.decorators import dag, task
 from airflow.models import Variable
 from sqlalchemy import create_engine, MetaData, select, insert, update, text
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import sessionmaker
 
 DATABASE_URL_STG = Variable.get('POSTGRESQL_URI')
@@ -28,8 +29,6 @@ def load_stg_tables_to_dds():
 
     stg_metadata.reflect(bind=stg_engine, schema='stg')
     dds_metadata.reflect(bind=dds_engine, schema='dds')
-
-    time.sleep(10)
 
     def load_table_data(stg_table_name, dds_table_name, unique_key, transform_func):
         stg_session = StgSession()
@@ -56,7 +55,7 @@ def load_stg_tables_to_dds():
             dds_session.commit()
 
         if last_update_time is not None:
-            query = select([stg_table]).where(stg_table.c.when_update > text(f"'{last_update_time}'"))
+            query = select([stg_table]).where(stg_table.c.when_updated > text(f"'{last_update_time}'"))
         else:
             query = select([stg_table])
 
@@ -76,11 +75,16 @@ def load_stg_tables_to_dds():
             else:
                 obj_id = row_dict.get(unique_key)
             transformed_row = transform_func(obj_id, row_dict)
-            insert_stmt = dds_table.insert().values(**transformed_row)
-            dds_session.execute(insert_stmt)
+            insert_stmt = pg_insert(dds_table).values(**transformed_row)
+            # insert_stmt = insert(dds_table).values(**transformed_row)
+            do_update_stmt = insert_stmt.on_conflict_do_update(
+                index_elements=[dds_table.c[unique_key.replace("_", "_unique_")]],
+                set_=transformed_row
+            )
+            dds_session.execute(do_update_stmt)
 
         if new_rows:
-            last_update_time = new_rows[-1][stg_table.c.when_update]
+            last_update_time = new_rows[-1][stg_table.c.when_updated]
             update_settings = update(settings_table).where(
                 settings_table.c.setting_key == f'{dds_table_name}_last_update'
             ).values(
@@ -163,13 +167,13 @@ def load_stg_tables_to_dds():
 
         if last_update_time_mongo is not None:
             query_mongo = select([mongo_clients_table]).where(
-                mongo_clients_table.c.when_update > text(f"'{last_update_time_mongo}'"))
+                mongo_clients_table.c.when_updated > text(f"'{last_update_time_mongo}'"))
         else:
             query_mongo = select([mongo_clients_table])
 
         if last_update_time_pg is not None:
             query_pg = select([pg_clients_table]).where(
-                pg_clients_table.c.when_update > text(f"'{last_update_time_pg}'"))
+                pg_clients_table.c.when_updated > text(f"'{last_update_time_pg}'"))
         else:
             query_pg = select([pg_clients_table])
 
@@ -211,11 +215,15 @@ def load_stg_tables_to_dds():
                 combined_data.append(combined_record)
 
         for row in combined_data:
-            insert_stmt = dds_clients_table.insert().values(**row)
-            dds_session.execute(insert_stmt)
+            insert_stmt = pg_insert(dds_clients_table).values(**row)
+            do_update_stmt = insert_stmt.on_conflict_do_update(
+                index_elements=[dds_clients_table.c.client_unique_id],
+                set_=row
+            )
+            dds_session.execute(do_update_stmt)
 
         if new_mongo_rows:
-            last_update_time_mongo = new_mongo_rows[-1][mongo_clients_table.c.when_update]
+            last_update_time_mongo = new_mongo_rows[-1][mongo_clients_table.c.when_updated]
             update_settings_mongo = update(settings_table).where(
                 settings_table.c.setting_key == 'dm_clients_mongo_last_update'
             ).values(
@@ -224,7 +232,7 @@ def load_stg_tables_to_dds():
             dds_session.execute(update_settings_mongo)
 
         if new_pg_rows:
-            last_update_time_pg = new_pg_rows[-1][pg_clients_table.c.when_update]
+            last_update_time_pg = new_pg_rows[-1][pg_clients_table.c.when_updated]
             update_settings_pg = update(settings_table).where(
                 settings_table.c.setting_key == 'dm_clients_pg_last_update'
             ).values(
@@ -263,7 +271,8 @@ def load_stg_tables_to_dds():
             dds_session.commit()
 
         if last_update_time is not None:
-            query = select([mongo_orders_table]).where(mongo_orders_table.c.when_update > text(f"'{last_update_time}'"))
+            query = select([mongo_orders_table]).where(
+                mongo_orders_table.c.when_updated > text(f"'{last_update_time}'"))
         else:
             query = select([mongo_orders_table])
 
@@ -307,7 +316,11 @@ def load_stg_tables_to_dds():
                     'time': time_mark.time(),
                     'date': time_mark.date()
                 }
-                time_insert_stmt = dds_time_table.insert().values(**time_record)
+                time_insert_stmt = pg_insert(dds_time_table).values(**time_record)
+                # do_update_stmt = time_insert_stmt.on_conflict_do_update(
+                #     index_elements=[dds_time_table.c.time_mark],
+                #     set_=time_record
+                # )
                 result = dds_session.execute(time_insert_stmt)
                 time_id = result.inserted_primary_key[0]
 
@@ -318,11 +331,15 @@ def load_stg_tables_to_dds():
                     'time_id': time_id,
                     'status': row_dict['final_status']
                 }
-                order_insert_stmt = dds_orders_table.insert().values(**order_record)
-                dds_session.execute(order_insert_stmt)
+                order_insert_stmt = pg_insert(dds_orders_table).values(**order_record)
+                do_update_order_stmt = order_insert_stmt.on_conflict_do_update(
+                    index_elements=[dds_orders_table.c.order_unique_id],
+                    set_=order_record
+                )
+                dds_session.execute(do_update_order_stmt)
 
         if new_rows:
-            last_update_time = new_rows[-1][mongo_orders_table.c.when_update]
+            last_update_time = new_rows[-1][mongo_orders_table.c.when_updated]
             update_settings = update(settings_table).where(
                 settings_table.c.setting_key == 'dm_orders_last_update'
             ).values(
@@ -360,7 +377,8 @@ def load_stg_tables_to_dds():
             dds_session.commit()
 
         if last_update_time is not None:
-            query = select([api_delivery_table]).where(api_delivery_table.c.when_update > text(f"'{last_update_time}'"))
+            query = select([api_delivery_table]).where(
+                api_delivery_table.c.when_updated > text(f"'{last_update_time}'"))
         else:
             query = select([api_delivery_table])
 
@@ -399,11 +417,15 @@ def load_stg_tables_to_dds():
                 'rating': row_dict['rating'],
                 'tips': row_dict['tips']
             }
-            delivery_insert_stmt = dds_delivery_table.insert().values(**delivery_record)
-            dds_session.execute(delivery_insert_stmt)
+            delivery_insert_stmt = pg_insert(dds_delivery_table).values(**delivery_record)
+            do_update_stmt = delivery_insert_stmt.on_conflict_do_update(
+                index_elements=[dds_delivery_table.c.delivery_unique_id],
+                set_=delivery_record
+            )
+            dds_session.execute(do_update_stmt)
 
         if new_rows:
-            last_update_time = new_rows[-1][api_delivery_table.c.when_update]
+            last_update_time = new_rows[-1][api_delivery_table.c.when_updated]
             update_settings = update(settings_table).where(
                 settings_table.c.setting_key == 'dm_delivery_last_update'
             ).values(
@@ -442,7 +464,7 @@ def load_stg_tables_to_dds():
 
         if last_update_time is not None:
             query = select([mongo_orders_table]).where(
-                mongo_orders_table.c.when_update > text(f"'{last_update_time}'"))
+                mongo_orders_table.c.when_updated > text(f"'{last_update_time}'"))
         else:
             query = select([mongo_orders_table])
 
@@ -481,11 +503,15 @@ def load_stg_tables_to_dds():
                     'bonus_payment': row_dict['payed_by_bonuses'],
                     'bonus_grant': row_dict['bonus_for_visit']
                 }
-                fact_insert_stmt = dds_fact_table.insert().values(**fact_record)
-                dds_session.execute(fact_insert_stmt)
+                fact_insert_stmt = pg_insert(dds_fact_table).values(**fact_record)
+                do_update_stmt = fact_insert_stmt.on_conflict_do_update(
+                    index_elements=[dds_fact_table.c.id],
+                    set_=fact_record
+                )
+                dds_session.execute(do_update_stmt)
 
         if new_rows:
-            last_update_time = new_rows[-1][mongo_orders_table.c.when_update]
+            last_update_time = new_rows[-1][mongo_orders_table.c.when_updated]
             update_settings = update(settings_table).where(
                 settings_table.c.setting_key == 'dm_fact_table_last_update'
             ).values(
@@ -499,11 +525,12 @@ def load_stg_tables_to_dds():
 
     @task
     def load_category_data():
+        time.sleep(10)
         load_table_data('pg_category', 'dm_category', 'category_id', transform_category)
 
     @task
     def load_restaurant_data():
-        load_table_data('mongo_restaurants', 'dm_restaurants', '', transform_restaurant)
+        load_table_data('mongo_restaurants', 'dm_restaurants', 'restaurant_id', transform_restaurant)
 
     @task
     def load_dish_data():
@@ -511,7 +538,7 @@ def load_stg_tables_to_dds():
 
     @task
     def load_deliveryman_data():
-        load_table_data('api_deliveryman', 'dm_deliveryman', '', transform_deliveryman)
+        load_table_data('api_deliveryman', 'dm_deliveryman', 'deliveryman_id', transform_deliveryman)
 
     @task
     def load_client_data():
