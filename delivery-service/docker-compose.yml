@@ -1,0 +1,26 @@
+version: "3"
+services:
+  postgres-delivery-service:
+    image: postgres:latest
+    container_name: postgres-file-service
+    restart: always
+    environment:
+      - POSTGRES_DB=delivery-service
+      - POSTGRES_USER=delivery-service
+      - POSTGRES_PASSWORD=delivery-service
+    command: postgres -p 58081
+    ports:
+      - 58081:58081
+
+  delivery-service:
+    image: delivery-service:v1
+    container_name: delivery-service
+    restart: always
+    environment:
+      - DB_USER=delivery-service
+      - DB_PASS=delivery-service
+      - DB_HOST=postgres-delivery-service
+      - DB_PORT=58081
+      - PORT=11001
+    ports:
+      - 11001:11001
