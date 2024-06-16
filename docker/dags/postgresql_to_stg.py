@@ -4,8 +4,9 @@ from airflow.models import Variable
 from sqlalchemy import create_engine, MetaData, select, insert, update, text
 from sqlalchemy.orm import sessionmaker
 
-DATABASE_URL_SRC = 'postgresql+psycopg2://postgres:postgres@postgres:5432/postgres'
-DATABASE_URL_DWH = 'postgresql+psycopg2://postgres:postgres@postgres:5432/postgres'
+DATABASE_URL_SRC = Variable.get('POSTGRESQL_URI')
+DATABASE_URL_DWH = Variable.get('POSTGRESQL_URI')
+
 
 @dag(
     schedule_interval='@daily',
@@ -29,9 +30,6 @@ def load_pg_tables_to_stg():
         src_session = Session()
         dwh_session = DwhSession()
 
-        # print(src_metadata.tables)
-        # print(dwh_metadata.tables)
-
         source_table = src_metadata.tables[f'public.{table_name}']
         stg_table = dwh_metadata.tables[f'stg.{stg_table_name}']
         settings_table = dwh_metadata.tables['stg.settings']
@@ -39,8 +37,6 @@ def load_pg_tables_to_stg():
         # Get last loaded ID
         query = select([settings_table.c.settings]).where(settings_table.c.setting_key == f'{stg_table_name}_last_id')
         result = dwh_session.execute(query).fetchone()
-
-        print(result)
 
         if result:
             last_id = result['settings']['last_id']
@@ -66,8 +62,6 @@ def load_pg_tables_to_stg():
             query = select([source_table])
         new_rows = src_session.execute(query).fetchall()
 
-        print(new_rows)
-
         for row in new_rows:
             insert_stmt = stg_table.insert().values(
                 **row,
@@ -78,7 +72,8 @@ def load_pg_tables_to_stg():
         if new_rows:
             last_id = new_rows[-1][key_id]
             existing_setting = dwh_session.execute(
-                select([settings_table.c.setting_key]).where(settings_table.c.setting_key == f'{stg_table_name}_last_id')
+                select([settings_table.c.setting_key]).where(
+                    settings_table.c.setting_key == f'{stg_table_name}_last_id')
             ).fetchone()
 
             if existing_setting:
@@ -88,15 +83,13 @@ def load_pg_tables_to_stg():
                     settings={'last_id': last_id}
                 )
                 dwh_session.execute(update_settings)
-                print("update")
             else:
                 insert_settings = insert(settings_table).values(
                     setting_key=f'{stg_table_name}_last_id',
                     settings={'last_id': last_id}
                 )
                 dwh_session.execute(insert_settings)
-                print("insert")
-        #
+
         dwh_session.commit()
         src_session.close()
         dwh_session.close()
@@ -117,6 +110,7 @@ def load_pg_tables_to_stg():
     dish_task = load_dish_data()
     client_task = load_client_data()
 
-    category_task >> dish_task >> client_task
+    category_task >> [dish_task, client_task]
+
 
 pg_tables_dag = load_pg_tables_to_stg()

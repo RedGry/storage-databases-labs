@@ -2,6 +2,7 @@ import time
 
 import pendulum
 from airflow.decorators import dag, task
+from airflow.models import Variable
 from pymongo import MongoClient
 from pymongo.errors import ConnectionFailure
 from sqlalchemy import create_engine, MetaData, select, insert, update
@@ -10,8 +11,8 @@ import json
 from bson import ObjectId
 
 # Настройки подключения
-MONGO_URI = 'mongodb://root:root@mongo:27017/mydatabase?authSource=admin'
-DATABASE_URL_DWH = 'postgresql+psycopg2://postgres:postgres@postgres:5432/postgres'
+MONGO_URI = Variable.get('MONGO_URI')
+DATABASE_URL_DWH = Variable.get('POSTGRESQL_URI')
 
 
 def connect_to_mongo(retries=5, delay=5):
@@ -83,7 +84,7 @@ def load_mongo_to_stg():
             insert_stmt = insert(stg_table).values(
                 obj_id=f'{doc_id}',
                 obj_val=doc_json,
-                when_updated=pendulum.now()
+                when_update=pendulum.now()
             )
             dwh_session.execute(insert_stmt)
             last_id = doc_id

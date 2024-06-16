@@ -1,13 +1,14 @@
 import requests
 import pendulum
 from airflow.decorators import dag, task
+from airflow.models import Variable
 from sqlalchemy import create_engine, MetaData, select, insert, update
 from sqlalchemy.orm import sessionmaker
 import json
 
 # Настройки подключения
-DATABASE_URL_DWH = 'postgresql+psycopg2://postgres:postgres@postgres:5432/postgres'
-API_URL = 'http://158.160.165.49:11001/api'
+DATABASE_URL_DWH = Variable.get('POSTGRESQL_URI')
+API_URL = Variable.get('API_URL')
 
 
 @dag(
