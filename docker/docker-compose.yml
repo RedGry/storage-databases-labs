@@ -68,7 +68,10 @@ services:
       -c "
       pip install -r /requirements.txt &&
       airflow db init && 
-      airflow users create --role Admin --username airflow --password airflow --email airflow@airflow.com --firstname airflow --lastname airflow
+      airflow users create --role Admin --username airflow --password airflow --email airflow@airflow.com --firstname airflow --lastname airflow &&
+      airflow variables set POSTGRESQL_URI 'postgresql+psycopg2://postgres:postgres@postgres:5432/postgres' &&
+      airflow variables set MONGO_URI 'mongodb://root:root@mongo:27017/mydatabase?authSource=admin' &&
+      airflow variables set API_URL 'http://158.160.165.49:11001/api'
       "
     restart: on-failure
     networks:
