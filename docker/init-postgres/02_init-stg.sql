@@ -5,7 +5,7 @@ CREATE TABLE IF NOT EXISTS stg.mongo_clients
     id           SERIAL PRIMARY KEY,
     obj_id       VARCHAR   NOT NULL,
     obj_val      TEXT      NOT NULL,
-    when_updated TIMESTAMP NOT NULL DEFAULT now()
+    when_update TIMESTAMP NOT NULL DEFAULT now()
 );
 
 CREATE TABLE IF NOT EXISTS stg.mongo_restaurants
@@ -13,7 +13,7 @@ CREATE TABLE IF NOT EXISTS stg.mongo_restaurants
     id           SERIAL PRIMARY KEY,
     obj_id       VARCHAR   NOT NULL,
     obj_val      TEXT      NOT NULL,
-    when_updated TIMESTAMP NOT NULL DEFAULT now()
+    when_update TIMESTAMP NOT NULL DEFAULT now()
 );
 
 CREATE TABLE IF NOT EXISTS stg.mongo_orders
@@ -21,7 +21,7 @@ CREATE TABLE IF NOT EXISTS stg.mongo_orders
     id           SERIAL PRIMARY KEY,
     obj_id       VARCHAR   NOT NULL,
     obj_val      TEXT      NOT NULL,
-    when_updated TIMESTAMP NOT NULL DEFAULT now()
+    when_update TIMESTAMP NOT NULL DEFAULT now()
 );
 
 CREATE TABLE IF NOT EXISTS stg.pg_category

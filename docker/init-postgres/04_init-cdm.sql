@@ -2,7 +2,7 @@ CREATE SCHEMA IF NOT EXISTS cdm;
 
 CREATE TABLE IF NOT EXISTS cdm.deliveryman_income (
     id SERIAL PRIMARY KEY,
-    deliveryman_id INT NOT NULL,
+    deliveryman_id VARCHAR NOT NULL,
     deliveryman_name VARCHAR(255) NOT NULL,
     year INT NOT NULL CHECK (year >= 1900 AND year <= EXTRACT(YEAR FROM CURRENT_DATE)),
     month INT NOT NULL CHECK (month >= 1 AND month <= 12),

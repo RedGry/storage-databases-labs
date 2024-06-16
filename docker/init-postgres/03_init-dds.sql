@@ -82,6 +82,18 @@ CREATE TABLE IF NOT EXISTS dds.dm_delivery
     tips               INT       NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS dds.dm_fact_table
+(
+    id            SERIAL PRIMARY KEY,
+    dish_id       INT            NOT NULL references dds.dm_dish (id),
+    order_id      INT            NOT NULL REFERENCES dds.dm_orders (id),
+    amount        INT            NOT NULL,
+    price         NUMERIC(14, 2) NOT NULL,
+    total_amount  NUMERIC(14, 2) NOT NULL,
+    bonus_payment NUMERIC(14, 2) NOT NULL,
+    bonus_grant   NUMERIC(14, 2) NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS dds.settings
 (
     id          SERIAL PRIMARY KEY,
